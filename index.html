@@ -461,16 +461,32 @@
   </div>
 </div>
 
-<script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js";
+  import {
+    getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, query, orderBy
+  } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyAAO3psN5dgMyglu6Ik5L6JYWxrUYvxmXI",
+    authDomain: "registre-contrats-growth-ally.firebaseapp.com",
+    projectId: "registre-contrats-growth-ally",
+    storageBucket: "registre-contrats-growth-ally.firebasestorage.app",
+    messagingSenderId: "195859731681",
+    appId: "1:195859731681:web:489274874635ff16e913a0"
+  };
+  const fbApp = initializeApp(firebaseConfig);
+  const db = getFirestore(fbApp);
+
 (function(){
-  var STORAGE_KEY = 'contract-ledger-chain-v2';
-  var STORAGE_KEY_TEST = 'contract-ledger-chain-v2-test';
+  var COLLECTION = 'remises';
+  var COLLECTION_TEST = 'remises_test';
   var GENESIS = 'GENESIS';
   var CONFIRM_PIN_HASH = '3e05fe9532073f33597fda50bf6b643c0e55abc97c809cb86492d91f79e386c9';
   var TEST_MODE = false;
 
-  function activeStorageKey(){
-    return TEST_MODE ? STORAGE_KEY_TEST : STORAGE_KEY;
+  function activeCollectionName(){
+    return TEST_MODE ? COLLECTION_TEST : COLLECTION;
   }
 
   var els = {
@@ -519,7 +535,7 @@
   function showError(msg){
     els.errorToast.textContent = msg;
     els.errorToast.classList.add('show');
-    setTimeout(function(){ els.errorToast.classList.remove('show'); }, 4000);
+    setTimeout(function(){ els.errorToast.classList.remove('show'); }, 10000);
   }
 
   function fieldError(id, on){
@@ -554,16 +570,20 @@
 
   async function loadChain(){
     try{
-      var res = await window.storage.get(activeStorageKey(), true);
-      return res ? JSON.parse(res.value) : [];
+      var colRef = collection(db, activeCollectionName());
+      var q = query(colRef, orderBy('index'));
+      var snap = await getDocs(q);
+      var out = [];
+      snap.forEach(function(d){ out.push(d.data()); });
+      return out;
     }catch(e){
       return [];
     }
   }
 
-  async function saveChain(chain){
-    var res = await window.storage.set(activeStorageKey(), JSON.stringify(chain), true);
-    if(!res) throw new Error('write failed');
+  async function addEntryDoc(entry){
+    var colRef = collection(db, activeCollectionName());
+    await setDoc(doc(colRef, String(entry.index)), entry);
   }
 
   async function verifyChain(chain){
@@ -693,12 +713,10 @@
     renderLedger(lastChain, lastIntegrity);
   });
 
-  var EXPORT_KEY = 'contract-ledger-last-export';
-
   async function loadLastExport(){
     try{
-      var res = await window.storage.get(EXPORT_KEY, true);
-      return res ? res.value : null;
+      var snap = await getDoc(doc(db, 'meta', 'last_export'));
+      return snap.exists() ? snap.data().timestamp : null;
     }catch(e){
       return null;
     }
@@ -706,7 +724,7 @@
 
   async function saveLastExport(iso){
     try{
-      await window.storage.set(EXPORT_KEY, iso, true);
+      await setDoc(doc(db, 'meta', 'last_export'), { timestamp: iso });
     }catch(e){}
   }
 
@@ -846,8 +864,7 @@
         prevHash: prevHash
       };
       entry.hash = await sha256Hex(canonicalPayload(entry));
-      chain.push(entry);
-      await saveChain(chain);
+      await addEntryDoc(entry);
 
       els.receiptIdx.textContent = entry.index;
       els.receiptHash.textContent = entry.hash;
@@ -858,7 +875,8 @@
 
       await refreshAndVerify();
     }catch(err){
-      showError('L\u2019enregistrement a \u00e9chou\u00e9. R\u00e9essaie dans un instant.');
+      console.error('Erreur d\u2019enregistrement de la remise :', err);
+      showError('L\u2019enregistrement a \u00e9chou\u00e9 : ' + (err && err.message ? err.message : err));
     }finally{
       els.submitBtn.disabled = false;
       els.submitBtn.textContent = 'Enregistrer la remise';
@@ -922,10 +940,11 @@
       };
       entry.hash = await sha256Hex(canonicalPayload(entry));
       chain.push(entry);
-      await saveChain(chain);
+      await addEntryDoc(entry);
       await refreshAndVerify();
     }catch(err){
-      showError(isReject ? 'Le signalement a \u00e9chou\u00e9. R\u00e9essaie.' : 'La confirmation a \u00e9chou\u00e9. R\u00e9essaie.');
+      console.error('Erreur de confirmation/signalement :', err);
+      showError((isReject ? 'Le signalement a \u00e9chou\u00e9 : ' : 'La confirmation a \u00e9chou\u00e9 : ') + (err && err.message ? err.message : err));
       btn.disabled = false;
       if(otherBtn) otherBtn.disabled = false;
       btn.textContent = isReject ? 'Signaler non conforme' : 'Confirmer la r\u00e9ception';
@@ -941,7 +960,11 @@
   });
 
   els.resetTestBtn.addEventListener('click', async function(){
-    await window.storage.set(STORAGE_KEY_TEST, JSON.stringify([]), true);
+    var colRef = collection(db, COLLECTION_TEST);
+    var snap = await getDocs(colRef);
+    var deletions = [];
+    snap.forEach(function(d){ deletions.push(deleteDoc(d.ref)); });
+    await Promise.all(deletions);
     await refreshAndVerify();
   });
 
